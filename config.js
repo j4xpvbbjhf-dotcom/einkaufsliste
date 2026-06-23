@@ -21,8 +21,8 @@
 // =============================================================
 
 window.EINKAUF_CONFIG = {
-  SUPABASE_URL: "",        // z.B. "https://abcxyz.supabase.co"
-  SUPABASE_ANON_KEY: "",   // der lange "anon public" Schlüssel
+  SUPABASE_URL: "https://wfvrnkymxblywlsbiyop.supabase.co",
+SUPABASE_ANON_KEY: "sb_publishable_P1qzWK8h4JmUXsPsJp6vXQ_xvRrma8m",
 
   // Name der gemeinsamen Liste. Wer denselben Namen nutzt, teilt dieselbe
   // Liste. Du kannst das frei wählen, z.B. "familie-sturm".
