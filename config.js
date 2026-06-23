@@ -25,6 +25,6 @@ window.EINKAUF_CONFIG = {
 SUPABASE_ANON_KEY: "sb_publishable_P1qzWK8h4JmUXsPsJp6vXQ_xvRrma8m",
 
   // Name der gemeinsamen Liste. Wer denselben Namen nutzt, teilt dieselbe
-  // Liste. Du kannst das frei wählen, z.B. "familie-sturm".
+  // Liste. Du kannst das frei wählen, z.B. "familie".
   LIST_ID: "haushalt"
 };
