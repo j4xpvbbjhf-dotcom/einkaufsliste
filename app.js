@@ -83,6 +83,18 @@ const SEED_HISTORY = [
 
 // ---------- Helfer ----------
 const label = (p) => p.spec ? `${p.name}, ${p.spec}` : p.name;
+
+// Menge "1 kg" -> { num: '1', unit: 'kg' }. Ohne führende Zahl wird 1 angenommen.
+function parseSpec(spec) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(.*)$/.exec(spec || '');
+  if (m) return { num: m[1], unit: m[2].trim() };
+  return { num: '1', unit: (spec || '').trim() };
+}
+// Effektive Menge eines eingebauten Katalogartikels (mit gespeicherter Änderung).
+function effSpec(name, fallback) {
+  const o = state.specOverrides || {};
+  return Object.prototype.hasOwnProperty.call(o, name) ? o[name] : fallback;
+}
 const escH = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const escA = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -106,7 +118,7 @@ function detect(name) {
 }
 
 // ---------- State ----------
-const SHARED_KEYS = ['items', 'history', 'customProducts', 'removedLabels'];
+const SHARED_KEYS = ['items', 'history', 'customProducts', 'removedLabels', 'specOverrides'];
 const USER_KEY = 'einkauf:user';
 
 let state = {
@@ -120,6 +132,8 @@ let state = {
   editCatalog: false,
   customProducts: [],
   removedLabels: [],
+  specOverrides: {},        // geänderte Standardmenge je Produktname, z.B. { 'Äpfel': '500 g' }
+  sheet: null,              // transient: offenes Mengenfenster oder null
   history: [],
   finishedCount: 0,
   _t: null
@@ -204,6 +218,56 @@ function removeProduct(lbl) {
 
 function incQty(lbl) { setState({ qty: { ...state.qty, [lbl]: Math.min(99, (state.qty[lbl] || 1) + 1) } }); }
 function decQty(lbl) { setState({ qty: { ...state.qty, [lbl]: Math.max(1, (state.qty[lbl] || 1) - 1) } }); }
+
+// Anzahl eines Artikels direkt in der Liste anpassen.
+function setItemQty(i, delta) {
+  setState({ items: state.items.map((it, j) =>
+    j === i ? { ...it, q: Math.max(1, Math.min(99, (it.q || 1) + delta)) } : it) });
+}
+
+// ---------- Mengenfenster ----------
+function openSheet(ctx) { setState({ sheet: ctx }); }
+function closeSheet() { setState({ sheet: null }); }
+
+// Getippte Werte aus den Feldern in den State sichern (vor jedem Neuzeichnen).
+function syncSheetFromDOM() {
+  if (!state.sheet) return;
+  const num = document.getElementById('sheetNum');
+  const unit = document.getElementById('sheetUnit');
+  const name = document.getElementById('sheetName');
+  const s = { ...state.sheet };
+  if (num) s.num = num.value;
+  if (unit) s.unit = unit.value;
+  if (name) s.name = name.value;
+  state.sheet = s;
+}
+
+function sheetStep(delta) {
+  syncSheetFromDOM();
+  let n = parseInt(state.sheet.num, 10);
+  if (isNaN(n)) n = 0;
+  n = Math.max(1, Math.min(999, n + delta));
+  setState({ sheet: { ...state.sheet, num: String(n) } });
+}
+
+function saveSheet() {
+  syncSheetFromDOM();
+  const s = state.sheet;
+  if (!s) return;
+  const num = (s.num == null ? '' : String(s.num)).trim();
+  const unit = (s.unit || '').trim();
+  const spec = unit ? `${num || '1'} ${unit}` : '';
+  const patch = { sheet: null };
+  if (s.custom) {
+    const newName = (s.name || s.baseName || '').trim() || s.baseName;
+    patch.customProducts = state.customProducts.map(p =>
+      (p.name === s.baseName && (p.spec || '') === (s.baseSpec || ''))
+        ? { ...p, name: newName, spec } : p);
+  } else {
+    patch.specOverrides = { ...state.specOverrides, [s.baseName]: spec };
+  }
+  setState(patch);
+}
 
 function login() {
   const el = document.getElementById('loginInput');
@@ -291,6 +355,41 @@ function renderApp() {
     ${navBtn('goListe', 'ti-list-check', 'Liste', state.tab === 'liste')}
     ${navBtn('goAuswahl', 'ti-circle-plus', 'Auswählen', state.tab === 'auswahl')}
     ${navBtn('goUebersicht', 'ti-history', 'Übersicht', state.tab === 'uebersicht')}
+  </div>
+  ${renderSheet()}`;
+}
+
+// Mengenfenster, das von unten aufklappt. Ein Baustein für alle Bearbeitungen.
+function renderSheet() {
+  const s = state.sheet;
+  if (!s) return '';
+  const nameField = s.editName ? `
+    <label style="display:block;font-size:12px;font-weight:600;color:#888882;margin-bottom:5px">Name</label>
+    <input id="sheetName" class="add-input" type="text" value="${escA(s.name || '')}" autocomplete="off"
+      style="width:100%;border:1.5px solid #e5e4e0;border-radius:10px;padding:11px 13px;font-size:16px;font-family:inherit;background:#f9f9f7;color:#1a1a18;outline:none;margin-bottom:16px">` : '';
+  return `
+  <div data-act="closeSheet" style="position:fixed;inset:0;background:rgba(0,0,0,.42);z-index:60;display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .18s ease both">
+    <div style="width:100%;max-width:430px;background:#fff;border-radius:22px 22px 0 0;padding:8px 18px calc(20px + env(safe-area-inset-bottom));animation:slideUp .22s ease both">
+      <div style="width:38px;height:4px;border-radius:100px;background:#e0dfda;margin:8px auto 16px"></div>
+      <p style="font-size:16px;font-weight:600;color:#1a1a18;margin-bottom:3px">Menge anpassen</p>
+      <p style="font-size:13px;color:#9a9a95;margin-bottom:18px">${escH(s.baseName || '')}</p>
+      ${nameField}
+      <label style="display:block;font-size:12px;font-weight:600;color:#888882;margin-bottom:5px">Menge</label>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:22px">
+        <div style="display:flex;align-items:center;border:1.5px solid #e5e4e0;border-radius:12px;overflow:hidden;flex-shrink:0">
+          <button data-act="sheetDec" data-press-soft aria-label="Weniger" style="width:46px;height:50px;border:none;background:#fff;color:#1b1f3b;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit"><i class="ti ti-minus" aria-hidden="true" style="font-size:19px"></i></button>
+          <input id="sheetNum" class="add-input" type="text" inputmode="decimal" value="${escA(String(s.num == null ? '' : s.num))}"
+            style="width:56px;height:50px;text-align:center;border:none;border-left:1.5px solid #e5e4e0;border-right:1.5px solid #e5e4e0;font-size:19px;font-weight:600;font-family:inherit;background:#fff;color:#1a1a18;outline:none;font-variant-numeric:tabular-nums">
+          <button data-act="sheetInc" data-press-soft aria-label="Mehr" style="width:46px;height:50px;border:none;background:#fff;color:#1b1f3b;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit"><i class="ti ti-plus" aria-hidden="true" style="font-size:19px"></i></button>
+        </div>
+        <input id="sheetUnit" class="add-input" type="text" placeholder="Einheit, z.B. kg, Bund" value="${escA(s.unit || '')}" autocomplete="off" autocorrect="off"
+          style="flex:1;min-width:0;height:50px;border:1.5px solid #e5e4e0;border-radius:12px;padding:0 14px;font-size:16px;font-family:inherit;background:#f9f9f7;color:#1a1a18;outline:none">
+      </div>
+      <div style="display:flex;gap:10px">
+        <button data-act="cancelSheet" data-press style="flex:1;background:#f2f1ed;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:600;color:#52524d;cursor:pointer;font-family:inherit">Abbrechen</button>
+        <button data-act="saveSheet" data-press style="flex:1;background:#1b1f3b;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:600;color:#fff;cursor:pointer;font-family:inherit">Speichern</button>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -340,13 +439,19 @@ function renderListe(initial) {
         const qq = q || 1;
         const rowStyle = `display:flex;align-items:center;gap:11px;padding:13px 14px;cursor:pointer;transition:background .1s;-webkit-tap-highlight-color:transparent;border-bottom:${isLast ? 'none' : '.5px solid #eeede9'}`;
         const chkStyle = `width:22px;height:22px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all .15s;border:1.5px solid ${done ? '#4ade80' : '#e5e4e0'};background:${done ? '#4ade80' : 'transparent'}`;
-        const nameStyle = `font-size:15.5px;flex:1;transition:all .15s;text-decoration:${done ? 'line-through' : 'none'};color:${done ? '#888882' : '#1a1a18'}`;
-        const qtyPart = qq > 1 ? `<span style="font-weight:700;color:#1b1f3b;font-variant-numeric:tabular-nums">${qq}× </span>` : '';
+        const nameStyle = `font-size:15.5px;flex:1;min-width:0;transition:all .15s;text-decoration:${done ? 'line-through' : 'none'};color:${done ? '#888882' : '#1a1a18'}`;
+        const stepper = `
+          <div style="display:flex;align-items:center;border:1px solid #e5e4e0;border-radius:8px;overflow:hidden;flex-shrink:0">
+            <button data-act="listDec" data-i="${i}" data-press-soft aria-label="Weniger" style="width:28px;height:28px;border:none;background:#fff;color:#1b1f3b;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit"><i class="ti ti-minus" aria-hidden="true" style="font-size:14px"></i></button>
+            <span style="min-width:22px;text-align:center;font-size:13.5px;font-weight:600;color:${qq > 1 ? '#1b1f3b' : '#9a9a95'};font-variant-numeric:tabular-nums">${qq}</span>
+            <button data-act="listInc" data-i="${i}" data-press-soft aria-label="Mehr" style="width:28px;height:28px;border:none;background:#fff;color:#1b1f3b;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit"><i class="ti ti-plus" aria-hidden="true" style="font-size:14px"></i></button>
+          </div>`;
         return `
           <div data-act="toggle" data-i="${i}" data-press-bg style="${rowStyle}">
             <div style="${chkStyle}">${done ? '<i class="ti ti-check" aria-hidden="true" style="font-size:12px;color:#166534;font-weight:700"></i>' : ''}</div>
             <span title="Hinzugefügt von" style="flex-shrink:0;width:20px;height:20px;border-radius:50%;background:transparent;color:#b4b4ae;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center">${escH(by || '·')}</span>
-            <span style="${nameStyle}">${qtyPart}${escH(n)}</span>
+            <span style="${nameStyle}">${escH(n)}</span>
+            ${stepper}
             <button data-act="remove" data-i="${i}" class="remove-x" aria-label="Entfernen" style="flex-shrink:0;border:none;background:none;color:#c9c9c4;font-size:17px;cursor:pointer;padding:2px 4px;line-height:1"><i class="ti ti-x" aria-hidden="true"></i></button>
           </div>`;
       }).join('');
@@ -376,7 +481,12 @@ function renderAuswahl() {
   state.items.forEach(it => { listQty[it.n] = (listQty[it.n] || 0) + (it.q || 1); });
 
   const merged = {}; CAT_KEYS.forEach(cat => merged[cat] = []);
-  Object.entries(CATALOG).forEach(([cat, ps]) => { ps.forEach(p => { if (!removedSet.has(label(p))) merged[cat].push(p); }); });
+  Object.entries(CATALOG).forEach(([cat, ps]) => {
+    ps.forEach(p => {
+      const eff = { name: p.name, spec: effSpec(p.name, p.spec) };
+      if (!removedSet.has(label(eff))) merged[cat].push(eff);
+    });
+  });
   state.customProducts.forEach(p => {
     const cat = CAT_KEYS.includes(p.cat) ? p.cat : 'Sonstiges';
     if (!removedSet.has(label(p))) merged[cat].push({ name: p.name, spec: p.spec, custom: true });
@@ -406,12 +516,12 @@ function renderAuswahl() {
            </div>`;
       return `
         <div style="${rowStyle}">
-          <div style="flex:1;min-width:0">
+          <button data-act="editSpec" data-name="${escA(p.name)}" data-spec="${escA(p.spec || '')}" data-cat="${escA(cat)}" data-custom="${p.custom ? '1' : ''}" data-press-soft style="flex:1;min-width:0;text-align:left;background:none;border:none;padding:6px 6px 6px 0;margin:-6px 0;cursor:pointer;font-family:inherit;border-radius:8px">
             <div style="display:flex;align-items:center;gap:7px">
               <span style="font-size:15px;font-weight:500;color:#1a1a18">${escH(p.name)}</span>${onListBadge}
             </div>
-            <div style="font-size:12.5px;color:#9a9a95;margin-top:1px">${escH(p.spec || '')}</div>
-          </div>
+            <div style="font-size:12.5px;color:#9a9a95;margin-top:1px;display:flex;align-items:center;gap:4px">${escH(p.spec || 'Menge festlegen')}<i class="ti ti-pencil" aria-hidden="true" style="font-size:12px;color:#c4c4bf"></i></div>
+          </button>
           ${right}
         </div>`;
     }).join('');
@@ -465,7 +575,7 @@ function renderAuswahl() {
         <i class="ti ti-plus" aria-hidden="true" style="font-size:17px"></i> Zum Katalog hinzufügen
       </button>
     </div>
-    <p style="font-size:12.5px;color:#9a9a95;margin:0 3px 14px;line-height:1.4">Tippe das <i class="ti ti-trash" aria-hidden="true" style="font-size:13px"></i> bei einem Artikel, um ihn aus dem Katalog zu entfernen.</p>` : '';
+    <p style="font-size:12.5px;color:#9a9a95;margin:0 3px 14px;line-height:1.4">Tippe einen Artikel an, um Name und Menge zu ändern. Das <i class="ti ti-trash" aria-hidden="true" style="font-size:13px"></i> entfernt ihn aus dem Katalog.</p>` : '';
 
   const header = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
@@ -561,21 +671,40 @@ const ACTIONS = {
   addProd: (el) => addProduct(el.dataset.lbl, el.dataset.cat),
   delProd: (el) => removeProduct(el.dataset.lbl),
   inc: (el) => incQty(el.dataset.lbl),
-  dec: (el) => decQty(el.dataset.lbl)
+  dec: (el) => decQty(el.dataset.lbl),
+  listInc: (el) => setItemQty(+el.dataset.i, +1),
+  listDec: (el) => setItemQty(+el.dataset.i, -1),
+  editSpec: (el) => {
+    const custom = el.dataset.custom === '1';
+    const { num, unit } = parseSpec(el.dataset.spec);
+    openSheet({
+      baseName: el.dataset.name, baseSpec: el.dataset.spec, cat: el.dataset.cat,
+      custom, editName: custom, name: el.dataset.name, num, unit
+    });
+  },
+  sheetInc: () => sheetStep(+1),
+  sheetDec: () => sheetStep(-1),
+  saveSheet, cancelSheet: closeSheet,
+  // Nur schließen, wenn wirklich auf den Hintergrund getippt wurde, nicht auf das Fenster.
+  closeSheet: (el, e) => { if (el === e.target) closeSheet(); }
 };
 
 root.addEventListener('click', (e) => {
+  // Eingabefelder normal fokussieren lassen, nie als Aktion behandeln.
+  if (e.target.closest('input, textarea, select')) return;
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
-  if (fn) { e.preventDefault(); fn(el); }
+  if (fn) { e.preventDefault(); fn(el, e); }
 });
 
 root.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.sheet) { closeSheet(); return; }
   if (e.key !== 'Enter') return;
   const id = e.target.id;
   if (id === 'loginInput') login();
   else if (id === 'manualInput') addManual();
+  else if (id === 'sheetName' || id === 'sheetUnit' || id === 'sheetNum') saveSheet();
   else if (id === 'prodName' || id === 'prodSpec') addCustomProduct();
 });
 
@@ -606,6 +735,7 @@ function showStatus(kind) {
     state.history = data.history || [];
     state.customProducts = data.customProducts || [];
     state.removedLabels = data.removedLabels || [];
+    state.specOverrides = data.specOverrides || {};
   } else {
     // Erststart: Demo-Daten, damit die App lebendig wirkt
     state.items = INITIAL.map(it => ({ ...it }));
