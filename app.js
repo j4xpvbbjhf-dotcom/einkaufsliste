@@ -136,6 +136,7 @@ let state = {
   sheet: null,              // transient: offenes Mengenfenster oder null
   history: [],
   finishedCount: 0,
+  undo: null,               // transient: zuletzt abgehakter Artikel für Rückgängig
   _t: null
 };
 
@@ -296,18 +297,50 @@ function checkOff(i) {
   const dateLabel = wi.date.toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
   const bought = { n: it.n, c: it.c, q: it.q || 1, by: it.by };
   const today = todayEntry();
-  let history;
+  let history, entryId;
   if (today) {
+    entryId = today.id;
     history = state.history.map(h => h === today ? { ...h, count: h.items.length + 1, items: [...h.items, bought] } : h);
   } else {
+    entryId = Date.now();
     const entry = {
-      id: Date.now(), week: wi.week, weekLabel: wi.label, dateLabel,
+      id: entryId, week: wi.week, weekLabel: wi.label, dateLabel,
       by: (state.user || 'G').trim().charAt(0).toUpperCase() || 'G',
       count: 1, items: [bought]
     };
     history = [entry, ...state.history];
   }
-  setState({ history, items: state.items.filter((_, j) => j !== i) });
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => setState({ undo: null }), 5000);
+  setState({ history, items: state.items.filter((_, j) => j !== i), undo: { item: it, index: i, entryId } });
+}
+
+// Rückgängig: Artikel an alter Stelle zurück, Eintrag im Verlauf wieder raus.
+let undoTimer = null;
+function undoCheckOff() {
+  const u = state.undo;
+  if (!u) return;
+  clearTimeout(undoTimer);
+  const items = [...state.items];
+  items.splice(Math.min(u.index, items.length), 0, u.item);
+  const history = state.history.map(h => {
+    if (h.id !== u.entryId) return h;
+    const k = h.items.map(x => x.n).lastIndexOf(u.item.n);
+    if (k < 0) return h;
+    const rest = h.items.filter((_, j) => j !== k);
+    return { ...h, count: rest.length, items: rest };
+  }).filter(h => h.items.length > 0);
+  setState({ items, history, undo: null });
+}
+
+function renderUndo() {
+  if (!state.undo || state.screen !== 'app') return '';
+  return `
+  <div style="position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 84px);width:calc(100% - 28px);max-width:402px;z-index:50;background:#1b1f3b;color:#fff;border-radius:12px;padding:12px 10px 12px 16px;display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,.18)">
+    <i class="ti ti-check" aria-hidden="true" style="font-size:16px;color:#4ade80"></i>
+    <span style="flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(state.undo.item.n)} erledigt</span>
+    <button data-act="undo" data-press style="flex-shrink:0;background:none;border:none;color:#4ade80;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;padding:6px 8px">Rückgängig</button>
+  </div>`;
 }
 
 function finish() {
@@ -335,7 +368,7 @@ function render() {
   let html = '';
   if (state.screen === 'login') html = renderLogin();
   else if (state.screen === 'complete') html = renderComplete();
-  else html = renderApp();
+  else html = renderApp() + renderUndo();
   root.innerHTML = html;
 
   if (pendingFocus) {
@@ -679,7 +712,7 @@ function renderComplete() {
 
 // ---------- Event-Delegation ----------
 const ACTIONS = {
-  login, logout, finish, addManual, addCustom: addCustomProduct,
+  login, logout, finish, undo: undoCheckOff, addManual, addCustom: addCustomProduct,
   toggleEdit: () => setState({ editCatalog: !state.editCatalog }),
   goListe: () => setState({ tab: 'liste' }),
   goAuswahl: () => setState({ tab: 'auswahl' }),
