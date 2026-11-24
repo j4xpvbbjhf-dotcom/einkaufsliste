@@ -281,6 +281,35 @@ function logout() {
   setState({ screen: 'login', user: '' });
 }
 
+// Abhaken nimmt den Artikel sofort von der Liste und trägt ihn in den
+// Verlauf des heutigen Tages ein. So bleiben Übersicht und „Häufig gebraucht“ gefüllt.
+function todayEntry() {
+  const wi = getWeekInfo();
+  const dateLabel = wi.date.toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
+  return state.history.find(h => h.week === wi.week && h.dateLabel === dateLabel) || null;
+}
+
+function checkOff(i) {
+  const it = state.items[i];
+  if (!it) return;
+  const wi = getWeekInfo();
+  const dateLabel = wi.date.toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
+  const bought = { n: it.n, c: it.c, q: it.q || 1, by: it.by };
+  const today = todayEntry();
+  let history;
+  if (today) {
+    history = state.history.map(h => h === today ? { ...h, count: h.items.length + 1, items: [...h.items, bought] } : h);
+  } else {
+    const entry = {
+      id: Date.now(), week: wi.week, weekLabel: wi.label, dateLabel,
+      by: (state.user || 'G').trim().charAt(0).toUpperCase() || 'G',
+      count: 1, items: [bought]
+    };
+    history = [entry, ...state.history];
+  }
+  setState({ history, items: state.items.filter((_, j) => j !== i) });
+}
+
 function finish() {
   const doneItems = state.items.filter(x => x.done);
   if (doneItems.length === 0) return;
@@ -399,10 +428,11 @@ function renderListe(initial) {
   const grouped = {};
   items.forEach((item, i) => { (grouped[item.c] = grouped[item.c] || []).push({ ...item, i }); });
 
-  const doneCount = items.filter(x => x.done).length;
-  const totalCount = items.length;
+  const today = todayEntry();
+  const doneCount = today ? today.items.length : 0;
+  const openCount = items.length;
+  const totalCount = openCount + doneCount;
   const pct = totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0;
-  const allDone = totalCount > 0 && doneCount === totalCount;
 
   const header = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
@@ -416,12 +446,12 @@ function renderListe(initial) {
       <div style="background:#4ade80;height:100%;border-radius:100px;width:${pct}%;transition:width .3s ease"></div>
     </div>
     <div style="display:flex;justify-content:space-between;margin-top:7px;font-size:12px;color:rgba(255,255,255,.4)">
-      <span><strong style="color:#fff;font-weight:600">${doneCount}</strong> von <strong style="color:#fff;font-weight:600">${totalCount}</strong> erledigt</span>
+      <span><strong style="color:#fff;font-weight:600">${openCount}</strong> offen · <strong style="color:#fff;font-weight:600">${doneCount}</strong> heute erledigt</span>
       <span>${pct} %</span>
     </div>`;
 
   let content;
-  if (totalCount === 0) {
+  if (openCount === 0) {
     content = `
       <div style="text-align:center;padding:60px 24px 24px;color:#9a9a95">
         <i class="ti ti-basket" aria-hidden="true" style="font-size:42px;color:#cfcfca"></i>
@@ -462,12 +492,7 @@ function renderListe(initial) {
         <div style="background:#fff;border-radius:14px;border:.5px solid #e5e4e0;overflow:hidden;margin-bottom:12px">${rows}</div>`;
     }).join('');
 
-    const finishBtn = allDone ? `
-      <button data-act="finish" data-press style="width:100%;margin:2px 0 14px;padding:15px;background:#4ade80;border:none;border-radius:14px;color:#0b3b1f;font-size:15.5px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:8px">
-        <i class="ti ti-circle-check" aria-hidden="true" style="font-size:19px"></i> Einkauf abschließen
-      </button>` : '';
-
-    content = groupsHtml + finishBtn;
+    content = groupsHtml;
   }
 
   return HEADER(header, '') + `<div style="flex:1;padding:14px 14px 0">${content}</div>`;
@@ -662,7 +687,7 @@ const ACTIONS = {
   startNew: () => setState({ screen: 'app', tab: 'liste' }),
   toggle: (el) => {
     const i = +el.dataset.i;
-    setState({ items: state.items.map((it, j) => j === i ? { ...it, done: !it.done } : it) });
+    checkOff(i);
   },
   remove: (el) => {
     const i = +el.dataset.i;
